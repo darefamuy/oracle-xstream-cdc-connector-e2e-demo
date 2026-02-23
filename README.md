@@ -279,7 +279,6 @@ docker rmi abbank-connect:latest
 | Connect shows `ORA-01031: insufficient privileges` | Re-run `03_create_xstream_outbound.sql` as sysdba |
 | `libclntsh.so: cannot open shared object` | Verify `connect/instantclient/` exists and matches container arch |
 | Connector status `FAILED` with `xstreams.jar` error | Ensure `xstreams.jar` + `ojdbc8.jar` are in connector `lib/` folder |
-| Topics not created | Check `auto.create.topics.enable=true` in broker config |
 
 ---
 
