@@ -4,7 +4,7 @@ Real-time capture of customer bank-account transactions from **Oracle 21c XE** u
 **Confluent Oracle XStream CDC Source Connector**, streaming events through a **fully
 self-hosted Confluent Platform (KRaft mode)** running in Docker.
 
-![E2E Demo Diagram](./e2e-demo-diagram.puml.png)
+![E2E Demo Diagram](./e2e-demo-diagram.png)
 
 ## Use Case
 
@@ -20,6 +20,8 @@ Tables captured:
 | `BANKDB.ACCOUNTS` | Bank accounts (savings, current, …) |
 | `BANKDB.TRANSACTIONS` | Debit/Credit transactions |
 | `BANKDB.TRANSACTION_AUDIT` | Audit trail of high-value transactions |
+
+![Captured Kafka Records](./captured-kafka-records.png)
 
 ---
 
