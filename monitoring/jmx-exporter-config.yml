@@ -1,0 +1,55 @@
+# =============================================================================
+# JMX Prometheus Exporter config for Kafka Connect
+# Exposes connector-level metrics at http://connect:1234/metrics
+# =============================================================================
+
+lowercaseOutputName: true
+lowercaseOutputLabelNames: true
+
+rules:
+  # ── Connector metrics ──────────────────────────────────────────────────────
+  - pattern: "kafka.connect<type=connector-metrics, connector=(.+)><>(connector-status)"
+    name: kafka_connect_connector_status
+    labels:
+      connector: "$1"
+    type: UNTYPED
+
+  - pattern: "kafka.connect<type=connector-task-metrics, connector=(.+), task=(.+)><>(status)"
+    name: kafka_connect_connector_task_status
+    labels:
+      connector: "$1"
+      task: "$2"
+    type: UNTYPED
+
+  # ── Source task metrics ────────────────────────────────────────────────────
+  - pattern: "kafka.connect<type=source-task-metrics, connector=(.+), task=(.+)><>(source-record-poll-total|source-record-write-total|source-record-active-count)"
+    name: kafka_connect_source_task_$3
+    labels:
+      connector: "$1"
+      task: "$2"
+    type: COUNTER
+
+  - pattern: "kafka.connect<type=source-task-metrics, connector=(.+), task=(.+)><>(poll-batch-max-time-ms|poll-batch-avg-time-ms)"
+    name: kafka_connect_source_task_$3
+    labels:
+      connector: "$1"
+      task: "$2"
+    type: GAUGE
+
+  # ── Sink task metrics ──────────────────────────────────────────────────────
+  - pattern: "kafka.connect<type=sink-task-metrics, connector=(.+), task=(.+)><>(sink-record-send-total|sink-record-active-count)"
+    name: kafka_connect_sink_task_$3
+    labels:
+      connector: "$1"
+      task: "$2"
+    type: COUNTER
+
+  # ── Worker metrics ─────────────────────────────────────────────────────────
+  - pattern: "kafka.connect<type=connect-worker-metrics><>(connector-count|task-count|connector-startup-failure-total)"
+    name: kafka_connect_worker_$1
+    type: GAUGE
+
+  # ── JVM heap ───────────────────────────────────────────────────────────────
+  - pattern: "java.lang<type=Memory><HeapMemoryUsage>(used|max)"
+    name: jvm_heap_memory_$1_bytes
+    type: GAUGE

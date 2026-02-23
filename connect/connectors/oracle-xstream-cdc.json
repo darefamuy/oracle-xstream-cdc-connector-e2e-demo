@@ -1,0 +1,60 @@
+{
+  "name": "ABBANK-XSTREAM-CDC",
+  "config": {
+    "connector.class": "io.confluent.connect.oracle.xstream.cdc.OracleXStreamSourceConnector",
+    "tasks.max": "1",
+
+    "_comment_database": "=== Oracle Connection ===",
+    "database.hostname":        "oracle",
+    "database.port":            "1521",
+    "database.user":            "c##ggadmin",
+    "database.password":        "Confluent12!",
+    "database.dbname":          "XE",
+    "database.service.name":    "XE",
+    "database.pdb.name":        "XEPDB1",
+    "database.out.server.name": "XOUT",
+
+    "_comment_topics": "=== Kafka Topics ===",
+    "topic.prefix":       "XEPDB1",
+    "table.include.list": "BANKDB.CUSTOMERS,BANKDB.ACCOUNTS,BANKDB.TRANSACTIONS,BANKDB.TRANSACTION_AUDIT",
+
+    "_comment_schema_history": "=== Schema History (required) ===",
+    "schema.history.internal.kafka.bootstrap.servers": "broker:29092",
+    "schema.history.internal.kafka.topic":             "schema-history-abbank",
+
+    "_comment_schema": "=== Schema / Serialization ===",
+    "key.converter":                                  "io.confluent.connect.avro.AvroConverter",
+    "key.converter.schema.registry.url":              "http://schema-registry:8081",
+    "value.converter":                                "io.confluent.connect.avro.AvroConverter",
+    "value.converter.schema.registry.url":            "http://schema-registry:8081",
+    "value.converter.enhanced.avro.schema.support":   "true",
+
+    "_comment_snapshot": "=== Snapshot ===",
+    "snapshot.mode":        "initial",
+    "snapshot.fetch.size":  "5000",
+    "snapshot.max.threads": "2",
+
+    "_comment_performance": "=== Performance Tuning ===",
+    "query.fetch.size":             "5000",
+    "max.queue.size":               "32768",
+    "max.batch.size":               "8192",
+    "producer.override.batch.size": "131072",
+    "producer.override.linger.ms":  "20",
+    "heartbeat.interval.ms":        "300000",
+
+    "_comment_metadata": "=== Event Envelope ===",
+    "include.schema.changes": "true",
+    "decimal.handling.mode":  "double",
+    "time.precision.mode":    "adaptive_time_microseconds",
+    "tombstones.on.delete":   "true",
+
+    "_comment_licensing": "=== Confluent Platform License ===",
+    "confluent.topic.bootstrap.servers":  "broker:29092",
+    "confluent.topic.replication.factor": "1",
+
+    "_comment_errors": "=== Error Handling ===",
+    "errors.tolerance":            "all",
+    "errors.log.enable":           "true",
+    "errors.log.include.messages": "true"
+  }
+}

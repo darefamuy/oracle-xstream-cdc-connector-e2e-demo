@@ -1,0 +1,235 @@
+# =============================================================================
+# AB Bank – Oracle 21c XStream CDC → Confluent Platform (KRaft)
+# =============================================================================
+# Usage:
+#   docker compose build    # build custom Connect image
+#   docker compose up -d    # start all services
+#   docker compose down -v  # stop + remove volumes
+# =============================================================================
+
+# ── Named volumes ─────────────────────────────────────────────────────────────
+volumes:
+  oracle-data:
+  kafka-data:
+
+# =============================================================================
+services:
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Oracle 21c XE – source database
+  # ──────────────────────────────────────────────────────────────────────────
+  oracle:
+    image: container-registry.oracle.com/database/express:21.3.0-xe
+    # Oracle XE is only published for linux/amd64. On Apple Silicon (ARM64)
+    # Docker Desktop runs this via Rosetta 2 emulation automatically.
+    # Declaring the platform explicitly silences the mismatch warning.
+    platform: linux/amd64
+    container_name: oracle
+    hostname: oracle
+    ports:
+      - "${ORACLE_PORT:-1521}:1521"
+    environment:
+      ORACLE_PWD: "${ORACLE_SYS_PASSWORD:-Oracle21c!}"
+      ORACLE_CHARACTERSET: AL32UTF8
+    volumes:
+      - oracle-data:/opt/oracle/oradata
+      # Init scripts are executed in alphabetical order by the official image
+      - ./oracle/scripts:/opt/oracle/scripts/startup
+    shm_size: "1g"
+    mem_limit: "4g"
+    healthcheck:
+      test: ["CMD-SHELL",
+             "echo 'SELECT 1 FROM DUAL;' | sqlplus -s sys/${ORACLE_SYS_PASSWORD:-Oracle21c!}@XE as sysdba | grep -q 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 20
+      start_period: 180s
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Kafka Broker – KRaft mode (no ZooKeeper)
+  # ──────────────────────────────────────────────────────────────────────────
+  broker:
+    image: confluentinc/cp-server:${CONFLUENT_PLATFORM_VERSION:-7.9.0}
+    container_name: broker
+    hostname: broker
+    ports:
+      - "${KAFKA_BROKER_PORT:-9092}:9092"
+      - "9101:9101"   # JMX
+    environment:
+      # KRaft settings
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: "broker,controller"
+      CLUSTER_ID: "MkU3OEVBNTcwNTJENDM2Qw"   # static ID for reproducibility
+
+      # Listener config
+      KAFKA_INTER_BROKER_LISTENER_NAME: "PLAINTEXT"
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:29092,CONTROLLER://localhost:9093,PLAINTEXT_HOST://0.0.0.0:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://broker:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+
+      # Broker settings
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 1
+      KAFKA_NUM_PARTITIONS: 4
+      KAFKA_LOG_RETENTION_HOURS: 168
+
+      # JMX
+      KAFKA_JMX_PORT: 9101
+      KAFKA_JMX_HOSTNAME: localhost
+
+      # Confluent Metrics
+      KAFKA_METRIC_REPORTERS: io.confluent.metrics.reporter.ConfluentMetricsReporter
+      CONFLUENT_METRICS_REPORTER_BOOTSTRAP_SERVERS: broker:29092
+      CONFLUENT_METRICS_REPORTER_TOPIC_REPLICAS: 1
+      CONFLUENT_METRICS_ENABLE: "true"
+      CONFLUENT_SUPPORT_CUSTOMER_ID: "anonymous"
+
+      # Log dirs
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-topics --bootstrap-server broker:29092 --list"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Schema Registry
+  # ──────────────────────────────────────────────────────────────────────────
+  schema-registry:
+    image: confluentinc/cp-schema-registry:${CONFLUENT_PLATFORM_VERSION:-7.9.0}
+    container_name: schema-registry
+    hostname: schema-registry
+    ports:
+      - "${SCHEMA_REGISTRY_PORT:-8081}:8081"
+    depends_on:
+      broker:
+        condition: service_healthy
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: "broker:29092"
+      SCHEMA_REGISTRY_LISTENERS: "http://0.0.0.0:8081"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8081/subjects || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Kafka Connect – custom image with Oracle XStream CDC connector
+  # ──────────────────────────────────────────────────────────────────────────
+  connect:
+    build:
+      context: ./connect
+      dockerfile: Dockerfile
+      args:
+        CONFLUENT_PLATFORM_VERSION: ${CONFLUENT_PLATFORM_VERSION:-7.9.0}
+    image: abbank-connect:latest
+    container_name: connect
+    hostname: connect
+    ports:
+      - "${CONNECT_PORT:-8083}:8083"
+      - "1234:1234"   # JMX exporter (Prometheus)
+    depends_on:
+      broker:
+        condition: service_healthy
+      schema-registry:
+        condition: service_healthy
+      oracle:
+        condition: service_healthy
+    environment:
+      CONNECT_BOOTSTRAP_SERVERS: "broker:29092"
+      CONNECT_REST_ADVERTISED_HOST_NAME: connect
+      CONNECT_REST_PORT: 8083
+      CONNECT_GROUP_ID: abbank-connect-group
+
+      # Internal topics
+      CONNECT_CONFIG_STORAGE_TOPIC: connect-configs
+      CONNECT_OFFSET_STORAGE_TOPIC: connect-offsets
+      CONNECT_STATUS_STORAGE_TOPIC: connect-status
+      CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_STATUS_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_OFFSET_FLUSH_INTERVAL_MS: 10000
+
+      # Converters – JSON with Schema Registry
+      CONNECT_KEY_CONVERTER: io.confluent.connect.avro.AvroConverter
+      CONNECT_KEY_CONVERTER_SCHEMA_REGISTRY_URL: "http://schema-registry:8081"
+      CONNECT_VALUE_CONVERTER: io.confluent.connect.avro.AvroConverter
+      CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL: "http://schema-registry:8081"
+
+      # Plugin path
+      CONNECT_PLUGIN_PATH: "/usr/share/java,/usr/share/confluent-hub-components"
+
+      # Increase heap for large transaction handling
+      # LD_LIBRARY_PATH must be set explicitly here as well as in the Dockerfile
+      # because Confluent's entrypoint chain (bash scripts calling other bash
+      # scripts) can drop inherited ENV vars before exec-ing the JVM.
+      LD_LIBRARY_PATH: /opt/oracle/instantclient
+      ORACLE_HOME: /opt/oracle/instantclient
+
+      KAFKA_OPTS: >-
+        -javaagent:/usr/share/jmx-exporter/jmx_prometheus_javaagent.jar=1234:/usr/share/jmx-exporter/kafka-connect.yml
+        -Djava.library.path=/opt/oracle/instantclient
+        -Xmx4G -Xms2G
+
+      # Monitoring interceptors — required for Control Center topic discovery.
+      # Without these, the Topics page shows "You don't have any topics"
+      # even when topics exist, because Control Center relies on interceptor
+      # metrics to populate its UI rather than querying the broker directly.
+      CONNECT_PRODUCER_INTERCEPTOR_CLASSES: "io.confluent.monitoring.clients.interceptor.MonitoringProducerInterceptor"
+      CONNECT_CONSUMER_INTERCEPTOR_CLASSES: "io.confluent.monitoring.clients.interceptor.MonitoringConsumerInterceptor"
+      CONNECT_PRODUCER_CONFLUENT_MONITORING_INTERCEPTOR_BOOTSTRAP_SERVERS: "broker:29092"
+      CONNECT_CONSUMER_CONFLUENT_MONITORING_INTERCEPTOR_BOOTSTRAP_SERVERS: "broker:29092"
+
+      # Logging
+      CONNECT_LOG4J_APPENDER_STDOUT_LAYOUT_CONVERSIONPATTERN: "[%d] %p %X{connector.context}%m (%c:%L)%n"
+      CONNECT_LOG4J_ROOT_LOGLEVEL: INFO
+      CONNECT_LOG4J_LOGGERS: >-
+        org.apache.kafka.connect.runtime.rest=WARN,
+        org.reflections=ERROR,
+        io.confluent.connect.oracle.xstream=INFO
+
+    volumes:
+      - ./monitoring/jmx-exporter-config.yml:/usr/share/jmx-exporter/kafka-connect.yml:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8083/connectors || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 15
+      start_period: 60s
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Confluent Control Center
+  # ──────────────────────────────────────────────────────────────────────────
+  control-center:
+    image: confluentinc/cp-enterprise-control-center:${CONFLUENT_PLATFORM_VERSION:-7.9.0}
+    container_name: control-center
+    hostname: control-center
+    ports:
+      - "${CONTROL_CENTER_PORT:-9021}:9021"
+    depends_on:
+      broker:
+        condition: service_healthy
+      schema-registry:
+        condition: service_healthy
+      connect:
+        condition: service_healthy
+    environment:
+      CONTROL_CENTER_BOOTSTRAP_SERVERS: "broker:29092"
+      CONTROL_CENTER_CONNECT_ABBANK_CLUSTER: "http://connect:8083"
+      CONTROL_CENTER_SCHEMA_REGISTRY_URL: "http://schema-registry:8081"
+      CONTROL_CENTER_REPLICATION_FACTOR: 1
+      CONTROL_CENTER_INTERNAL_TOPICS_PARTITIONS: 1
+      CONTROL_CENTER_MONITORING_INTERCEPTOR_TOPIC_PARTITIONS: 1
+      CONFLUENT_METRICS_TOPIC_REPLICATION: 1
+      PORT: 9021

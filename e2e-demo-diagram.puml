@@ -1,0 +1,74 @@
+@startuml
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Container.puml
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Component.puml
+
+LAYOUT_LEFT_RIGHT()
+
+title End-to-End Demo: Oracle CDC → Kafka Streams → Push Notifications
+
+Person(customer, "AB Bank Customer", "Receives instant push\nnotifications for\ntransaction events\n(email + SMS)")
+
+System_Boundary(oracle_sys, "Oracle 21c XE  [Database System]") {
+
+    ContainerDb(oracle_db, "BANKDB Schema", "Oracle 21c XE\nPDB: XEPDB1", "Tables: CUSTOMERS\nACCOUNTS\nTRANSACTIONS\nTRANSACTION_AUDIT")
+
+    Container(logminer, "LogMiner / Redo Logs", "Oracle Background Process", "Reads committed DML\nfrom online redo logs\nand archive log files")
+
+    Container(capture, "XStream Capture Process", "Oracle Background Process\nDBMS_XSTREAM_ADM", "Mines redo logs and\nassembles Logical Change\nRecords (LCRs) into\na staged queue")
+
+    Container(xstream_server, "XStream Outbound Server\n[ XOUT ]", "Oracle XStream API\nDBMS_XSTREAM_ADM\n.CREATE_OUTBOUND", "Buffers LCRs in the\nXStream internal queue.\nStreams change events\nto attached OCI clients.\nServer name: XOUT")
+}
+
+System_Boundary(confluent_sys, "Confluent Platform  [KRaft mode]") {
+
+    Container(cdc_connector, "Oracle XStream\nCDC Source Connector", "Confluent Kafka Connect\nio.confluent.connect\n.oracle.xstream.cdc", "Attaches to XOUT via OCI.\nConverts LCRs → Avro.\nPublishes CDC events\nto Kafka source topics")
+
+    Container(schema_registry, "Schema Registry", "Confluent Schema Registry\nPort: 8081", "Stores and evolves\nAvro schemas for\nall Kafka topics")
+
+    Container(broker, "Kafka Broker", "Confluent Server\nKRaft mode — no ZooKeeper\nPort: 9092", "Source topics:\n· XEPDB1.BANKDB.TRANSACTIONS\n· XEPDB1.BANKDB.ACCOUNTS\n· XEPDB1.BANKDB.CUSTOMERS\n· XEPDB1.BANKDB.TRANSACTION_AUDIT\n\nOutput topic:\n· abbank.notifications.*")
+
+    Container(streams_app, "Kafka Streams Application", "Java / Kafka Streams API\nStateful Stream Processor", "Consumes CDC events.\nApplies business rules:\n· High-value txn alerts (>₦500k)\n· Fraud / velocity detection\n· Balance threshold alerts\n· Transfer confirmations\nProduces enriched\nnotification events")
+
+}
+
+System_Boundary(gateway_sys, "Notification API Gateway  [External SaaS]") {
+
+    Container(notif_consumer, "Notification Consumer", "Kafka Connect Sink\nor Microservice", "Consumes\nabbank.notifications.*\nRoutes events to\nchannel adapters")
+
+    Container(email_adapter, "Email Channel Adapter", "SendGrid / AWS SES\nor SMTP Relay", "Formats and dispatches\ntransaction alert emails\nto customer inbox")
+
+    Container(sms_adapter, "SMS Channel Adapter", "Twilio / Africa's Talking\nor AWS SNS", "Formats and dispatches\nSMS text messages\nto customer mobile")
+}
+
+
+System_Ext(email_inbox, "Customer Email Inbox", "Gmail / Outlook\nor any SMTP inbox")
+System_Ext(mobile_phone, "Customer Mobile Phone", "SMS via cellular network")
+
+' Oracle internal flow
+Rel(oracle_db,      logminer,       "Committed DML",        "Redo / Archive Log")
+Rel(logminer,       capture,        "LogMiner mining",      "LCR assembly")
+Rel(capture,        xstream_server, "Enqueue LCRs",         "XStream staged queue")
+
+' XStream → Connect
+Rel(xstream_server, cdc_connector,  "Stream LCRs",          "OCI / XStream API\nTCP :1521")
+
+' Connect internal
+Rel(cdc_connector,  schema_registry,"Register / fetch\nAvro schemas",  "HTTP :8081")
+Rel(cdc_connector,  broker,         "Publish INSERT /\nUPDATE / DELETE", "Kafka Producer\nAvro :9092")
+
+' Kafka → Streams
+Rel(broker,         streams_app,    "Consume CDC\ntransaction events",  "Kafka Streams\nTCP :9092")
+Rel(streams_app,    broker,         "Publish notification\nevents",     "Kafka Producer\n:9092 → outbox topic")
+
+' Notification flow
+Rel(broker,         notif_consumer, "Consume outbox topic", "Kafka Consumer :9092")
+Rel(notif_consumer, email_adapter,  "Route email events",   "Internal dispatch")
+Rel(notif_consumer, sms_adapter,    "Route SMS events",     "Internal dispatch")
+Rel(email_adapter,  email_inbox,    "Send alert email",     "SMTP / HTTPS API")
+Rel(sms_adapter,    mobile_phone,   "Send SMS alert",       "HTTPS API → SS7")
+
+' Customer receives
+Rel(email_inbox,    customer,       "Reads email",          "")
+Rel(mobile_phone,   customer,       "Reads SMS",            "")
+
+@enduml

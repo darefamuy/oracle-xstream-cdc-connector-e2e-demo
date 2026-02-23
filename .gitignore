@@ -1,0 +1,5 @@
+.env
+connect/instantclient/*
+!connect/instantclient/.gitkeep
+connect/confluent-hub-components/*
+!connect/confluent-hub-components/.gitkeep
